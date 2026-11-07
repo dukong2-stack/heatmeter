@@ -1,0 +1,23 @@
+{
+  "_설명": "숫자만 고치면 됩니다. gdp는 연도별 명목 GDP(조원), rules는 과열 판정 기준입니다.",
+  "gdp": {
+    "2024": 2549,
+    "2025": 2611,
+    "2026": 2788
+  },
+  "_gdp_출처": "2024: 더밸류뉴스(한국은행), 2025: 추정치(더밸류뉴스), 2026: IMF 전망(한국경제). 더 이전 연도를 넣으면 버핏지수 과거 추세가 길어집니다.",
+  "rules": {
+    "buffett_hot": 120,
+    "credit_near_high": 95,
+    "credit_cold": 75,
+    "deposit_surge": 15,
+    "turnover_rank_hot": 90,
+    "turnover_rank_cold": 30,
+    "ipo_hot_share": 50,
+    "ipo_hot_open": 100,
+    "ipo_cold_share": 20,
+    "retail_rank_hot": 80,
+    "retail_rank_cold": 20
+  },
+  "backfill_years": 10
+}

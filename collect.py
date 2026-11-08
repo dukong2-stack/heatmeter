@@ -13,12 +13,14 @@ import io
 import json
 import os
 import re
+import ssl
 import sys
 import time
 import traceback
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(ROOT, "docs", "data", "data.json")
@@ -114,11 +116,60 @@ def find_col(df, *keys, exclude=("증감", "전일비")):
     return None
 
 
-def get_html(url, params=None, encoding="euc-kr"):
-    r = requests.get(url, params=params, headers=UA, timeout=25)
-    r.raise_for_status()
-    r.encoding = encoding
-    return r.text
+class LegacyTLS(HTTPAdapter):
+    """오래된 암호화 방식을 쓰는 사이트(38커뮤니케이션 등)용 접속 설정. 인증서 검증은 그대로 합니다."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_legacy = requests.Session()
+_legacy.mount("https://", LegacyTLS())
+
+
+def decode(r, must=None):
+    """응답을 한글이 깨지지 않게 풉니다. must(예: '예탁금')가 들어 있는 해석을 고릅니다."""
+    raw = r.content
+    tried = []
+    for enc in (r.encoding, "utf-8", "cp949", "euc-kr"):
+        if not enc or enc.lower() in tried:
+            continue
+        tried.append(enc.lower())
+        try:
+            text = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        if must is None or must in text:
+            return text
+    return raw.decode("cp949", errors="replace")
+
+
+def get_html(url, params=None, must=None):
+    """https → 오래된 암호화 방식 허용 → http 순서로 시도합니다."""
+    attempts = [
+        ("https", lambda: requests.get(url, params=params, headers=UA, timeout=25)),
+        ("https-legacy", lambda: _legacy.get(url, params=params, headers=UA, timeout=25)),
+        ("http", lambda: requests.get(url.replace("https://", "http://", 1), params=params, headers=UA, timeout=25)),
+    ]
+    last = None
+    for name, call in attempts:
+        try:
+            r = call()
+            r.raise_for_status()
+            text = decode(r, must)
+            if must and must not in text:
+                snippet = re.sub(r"\s+", " ", text[:300])
+                raise RuntimeError(f"'{must}' 없음 (상태 {r.status_code}, 주소 {r.url}, 앞부분: {snippet})")
+            return text
+        except Exception as e:  # noqa: BLE001
+            print(f"    {name} 실패: {str(e)[:200]}", flush=True)
+            last = e
+    raise last
 
 
 # ---------- 1. 한국거래소 ----------
@@ -209,7 +260,7 @@ def collect_deposits(old):
     stop = (last_date(old) - dt.timedelta(days=10)) if old else (TODAY - dt.timedelta(days=365 * 3))
     new = []
     for page in range(1, 400):
-        html = get_html("https://finance.naver.com/sise/sise_deposit.naver", {"page": page})
+        html = get_html("https://finance.naver.com/sise/sise_deposit.naver", {"page": page}, must="예탁금")
         tables = [flat_cols(t) for t in pd.read_html(io.StringIO(html))]
         t = next((t for t in tables if find_col(t, "예탁금")), None)
         if t is None:
@@ -255,7 +306,7 @@ def collect_ipo(old):
 
     comps = {}
     for p in range(1, pages + 1):
-        html = get_html(base, {"o": "k", "page": p})
+        html = get_html(base, {"o": "k", "page": p}, must="경쟁률")
         for t in pd.read_html(io.StringIO(html), match="경쟁률"):
             t = flat_cols(t)
             ncol, ccol = t.columns[0], find_col(t, "경쟁률")
@@ -269,7 +320,7 @@ def collect_ipo(old):
 
     new = []
     for p in range(1, pages + 1):
-        html = get_html(base, {"o": "nw", "page": p})
+        html = get_html(base, {"o": "nw", "page": p}, must="공모가")
         tables = [flat_cols(t) for t in pd.read_html(io.StringIO(html), match="공모가")]
         t = next((t for t in tables if find_col(t, "상장일")), None)
         if t is None:
@@ -319,12 +370,12 @@ def main():
         ("ipo", "38커뮤니케이션 공모주", collect_ipo),
     ]
     for key, label, fn in jobs:
-        print(f"[{label}]")
+        print(f"[{label}]", flush=True)
         try:
             data[key] = fn(data.get(key, []))
             ok += 1
         except Exception as e:  # noqa: BLE001 — 출처 하나가 실패해도 나머지는 저장
-            traceback.print_exc()
+            traceback.print_exc(file=sys.stdout)
             errors.append({"source": label, "message": str(e)[:300]})
     data["meta"] = {
         "updated": dt.datetime.now(KST).isoformat(timespec="minutes"),

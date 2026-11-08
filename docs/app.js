@@ -272,6 +272,50 @@ function chart(el, { series, yFmt, tFmt, band, refs = [], h = 200, rFmt }) {
   svg.addEventListener("pointerleave", () => { hideTip(); curEl.setAttribute("visibility", "hidden"); });
 }
 
+
+/* ---------- 차트 아래 최근 수치 표 ---------- */
+
+const WD = ["일", "월", "화", "수", "목", "금", "토"];
+function dayLabel(r) {
+  if (r.m) return `${r.m.slice(2, 4)}년 ${+r.m.slice(5)}월`;
+  const d = new Date(r.t);
+  return `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]})`;
+}
+
+/** cols: [{label, f, dec, unit, chg}] — chg가 있는 열은 바로 앞 행 대비 변화도 보여 줍니다. */
+function recent(chartId, rows, cols, { n = 7, title = "최근 7영업일" } = {}) {
+  const chartEl = document.getElementById(chartId);
+  let box = chartEl.nextElementSibling;
+  if (!box || !box.classList.contains("recent")) {
+    box = document.createElement("div"); box.className = "recent";
+    chartEl.after(box);
+  }
+  const xs = rows.filter((r) => r[cols[0].f] != null);
+  const body = [];
+  for (let k = xs.length - 1; k >= Math.max(0, xs.length - n); k--) {
+    const r = xs[k], prev = xs[k - 1];
+    const cells = cols.map((c) => {
+      const v = r[c.f];
+      let h = `<td class="n">${v == null ? "–" : fmt(v, c.dec) + (c.unit || "")}</td>`;
+      if (c.chg) {
+        const pv = prev ? prev[c.f] : null;
+        if (v == null || pv == null) h += '<td class="n">–</td>';
+        else {
+          const dv = v - pv, cu = c.unit === "%" ? "%p" : (c.unit || "");
+          const cls = Math.abs(dv) < 10 ** -(c.dec + 1) ? "" : dv > 0 ? "up" : "down";
+          h += `<td class="n ${cls}">${dv > 0 ? "+" : ""}${fmt(dv, c.dec)}${cu}</td>`;
+        }
+      }
+      return h;
+    }).join("");
+    body.push(`<tr><td>${dayLabel(r)}</td>${cells}</tr>`);
+  }
+  if (!body.length) { box.innerHTML = ""; return; }
+  const head = cols.map((c) => `<th class="n">${esc(c.label)}</th>${c.chg ? '<th class="n">전일 대비</th>' : ""}`).join("");
+  const chgLabel = rows.length && rows[0].m ? "전월 대비" : "전일 대비";
+  box.innerHTML = `<p class="recent-t">${esc(title)}</p><div class="tbl-wrap"><table class="tbl tbl-s"><thead><tr><th>${rows.length && rows[0].m ? "월" : "날짜"}</th>${head.replaceAll("전일 대비", chgLabel)}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
+}
+
 /* ---------- 화면 ---------- */
 
 const STATE_TXT = { hot: "과열", cold: "냉각", mid: "중립", none: "대기" };
@@ -315,18 +359,27 @@ function renderCharts() {
     chart($("#ch-pbr"), { series: [{ name: "PBR", color: c1, pts: P(D.mk, "pbr") }], band: bandOf(D.mk, "pbr"), yFmt: f1, tFmt: (v) => fmt(v, 2) + "배" });
     const hb = D.rules.buffett_hot ?? 120;
     chart($("#ch-buf"), { series: [{ name: "버핏지수", color: c1, pts: P(D.mk, "buf") }], refs: [{ v: hb, label: `과열 ${hb}%` }], yFmt: (v) => f0(v) + "%", tFmt: (v) => fmt(v, 1) + "%" });
+    recent("ch-kospi", D.mk, [{ label: "종가", f: "kospi", dec: 2, chg: true }]);
+    recent("ch-per", D.mk, [{ label: "PER", f: "per", dec: 2, unit: "배", chg: true }]);
+    recent("ch-pbr", D.mk, [{ label: "PBR", f: "pbr", dec: 2, unit: "배", chg: true }]);
+    recent("ch-buf", D.mk, [{ label: "버핏지수", f: "buf", dec: 1, unit: "%", chg: true }]);
   }
   if (S.tab === "flow") {
     chart($("#ch-credit"), { series: [{ name: "전체", color: hot, pts: P(D.dep, "credit") }, { name: "코스닥", color: c2, pts: P(D.dep, "credit_kosdaq") }], yFmt: f0, tFmt: (v) => fmt(v, 2) + "조" });
     chart($("#ch-dep"), { series: [{ name: "예탁금", color: cold, pts: P(D.dep, "deposit") }], yFmt: f0, tFmt: (v) => fmt(v, 2) + "조" });
     chart($("#ch-turn"), { series: [{ name: "회전율", color: c1, pts: P(D.mk, "turn") }], yFmt: (v) => f0(v) + "%", tFmt: (v) => fmt(v, 1) + "%" });
     chart($("#ch-trd"), { series: [{ name: "거래대금", color: c2, pts: P(D.mk, "trd20") }], yFmt: f0, tFmt: (v) => fmt(v, 1) + "조" });
+    recent("ch-credit", D.dep, [{ label: "전체", f: "credit", dec: 2, unit: "조", chg: true }, { label: "코스닥", f: "credit_kosdaq", dec: 2, unit: "조" }]);
+    recent("ch-dep", D.dep, [{ label: "예탁금", f: "deposit", dec: 2, unit: "조", chg: true }]);
+    recent("ch-turn", D.mk, [{ label: "회전율", f: "turn", dec: 1, unit: "%", chg: true }]);
+    recent("ch-trd", D.mk, [{ label: "당일", f: "trd", dec: 1, unit: "조", chg: true }, { label: "20일 평균", f: "trd20", dec: 1, unit: "조" }]);
   }
   if (S.tab === "mood") {
     chart($("#ch-retail"), {
       series: [{ name: "코스닥", color: c2, pts: P(D.retail, "kosdaq") }, { name: "코스피", color: c1, pts: P(D.retail, "kospi") }],
       yFmt: f0, tFmt: (v) => fmt(v, 1) + "%",
     });
+    recent("ch-retail", D.retail, [{ label: "코스닥", f: "kosdaq", dec: 1, unit: "%", chg: true }, { label: "코스피", f: "kospi", dec: 1, unit: "%" }], { n: 6, title: "최근 6개월" });
     const by = {};
     D.ipo.filter((r) => r.t >= t0).forEach((r) => {
       const m = r.d.slice(0, 7), a = (by[m] ||= { c: [], o: [] });

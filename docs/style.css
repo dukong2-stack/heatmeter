@@ -123,3 +123,9 @@ button { font: inherit; color: inherit; }
   @keyframes slide-r { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
   @keyframes slide-l { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
 }
+
+.recent { margin-top: 10px; }
+.recent-t { margin: 0 0 2px; font-size: .75rem; font-weight: 600; color: var(--muted); }
+.tbl-s { font-size: .8125rem; }
+.tbl-s th, .tbl-s td { padding: 5px 6px 5px 0; }
+.tbl-s td:first-child { color: var(--muted); }

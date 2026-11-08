@@ -255,6 +255,36 @@ def collect_retail(old):
 
 # ---------- 2. 네이버 증시자금동향 ----------
 
+DATE_RE = re.compile(r"(\d{2,4})\.(\d{1,2})\.(\d{1,2})")
+
+
+def parse_deposit_table(t):
+    """표 하나에서 (날짜, 예탁금, 신용잔고) 행을 뽑습니다. 날짜 열은 값 모양으로 찾습니다."""
+    pcol = find_col(t, "예탁금")
+    ccol = find_col(t, "신용")
+    if not pcol:
+        return []
+    dcol = max(t.columns, key=lambda c: t[c].astype(str).str.match(DATE_RE).sum())
+    rows = []
+    for _, r in t.iterrows():
+        m = DATE_RE.match(str(r[dcol]).strip())
+        if not m:
+            continue
+        y = int(m.group(1))
+        y = y + 2000 if y < 100 else y
+        try:
+            d = dt.date(y, int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+        dep = num(r[pcol])
+        cr = num(r[ccol]) if ccol else None
+        if dep is None:
+            continue
+        rows.append({"d": d.isoformat(), "deposit": round(dep / 1e4, 2),
+                     "credit": round(cr / 1e4, 2) if cr else None})
+    return rows
+
+
 def collect_deposits(old):
     """투자자예탁금·신용잔고(조원), 일별. 네이버 표의 단위는 억원."""
     stop = (last_date(old) - dt.timedelta(days=10)) if old else (TODAY - dt.timedelta(days=365 * 3))
@@ -262,32 +292,20 @@ def collect_deposits(old):
     for page in range(1, 400):
         html = get_html("https://finance.naver.com/sise/sise_deposit.naver", {"page": page}, must="예탁금")
         tables = [flat_cols(t) for t in pd.read_html(io.StringIO(html))]
-        t = next((t for t in tables if find_col(t, "예탁금")), None)
-        if t is None:
-            raise RuntimeError("네이버 증시자금동향 표 구조가 바뀌었습니다.")
-        dcol = t.columns[0]
-        pcol = find_col(t, "예탁금")
-        ccol = find_col(t, "신용")
-        got = 0
-        oldest = None
-        for _, r in t.iterrows():
-            m = re.match(r"(\d{2,4})\.(\d{1,2})\.(\d{1,2})", str(r[dcol]))
-            if not m:
-                continue
-            y = int(m.group(1))
-            y = y + 2000 if y < 100 else y
-            d = dt.date(y, int(m.group(2)), int(m.group(3)))
-            dep, cr = num(r[pcol]), num(r[ccol]) if ccol else None
-            if dep is None:
-                continue
-            new.append({"d": d.isoformat(), "deposit": round(dep / 1e4, 2),
-                        "credit": round(cr / 1e4, 2) if cr else None})
-            got += 1
-            oldest = d
-        if got == 0 or (oldest and oldest < stop):
+        best = max((parse_deposit_table(t) for t in tables), key=len, default=[])
+        if not best:
+            if page == 1:
+                print("    네이버 표 진단:", flush=True)
+                for i, t in enumerate(tables):
+                    print(f"      표{i}: 열={list(t.columns)[:8]} 첫 행={t.head(2).astype(str).values.tolist()}", flush=True)
+                raise RuntimeError("네이버 표에서 날짜·예탁금 행을 찾지 못했습니다(위 진단 참고).")
+            break
+        new += best
+        oldest = min(dt.date.fromisoformat(r["d"]) for r in best)
+        if oldest < stop:
             break
         time.sleep(0.4)
-    print(f"  네이버 증시자금: {len(new)}일")
+    print(f"  네이버 증시자금: {len(new)}일", flush=True)
     if not new:
         raise RuntimeError("네이버에서 예탁금을 읽지 못했습니다.")
     return merge(old, new, "d")

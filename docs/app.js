@@ -85,7 +85,8 @@ function signals(D) {
       const rising = k && k60 ? k.kospi > k60.kospi : false;
       const s = pct >= (R.credit_near_high ?? 95) && rising ? "hot" : pct <= (R.credit_cold ?? 75) ? "cold" : "mid";
       add({ name: "신용거래융자 잔고", val: fmt(r.credit, 1) + "조", s,
-        why: `1년 최고치(${fmt(hi, 1)}조)의 ${fmt(pct, 0)}%, 코스피 3개월 ${rising ? "상승" : "하락"} 중`, go: "flow" });
+        why: `1년 최고치(${fmt(hi, 1)}조)의 ${fmt(pct, 0)}%, 코스피 3개월 ${rising ? "상승" : "하락"} 중`
+          + (r.credit_kosdaq ? `, 코스닥 비중 ${fmt((r.credit_kosdaq / r.credit) * 100, 0)}%` : ""), go: "flow" });
     }
   }
 
@@ -316,7 +317,7 @@ function renderCharts() {
     chart($("#ch-buf"), { series: [{ name: "버핏지수", color: c1, pts: P(D.mk, "buf") }], refs: [{ v: hb, label: `과열 ${hb}%` }], yFmt: (v) => f0(v) + "%", tFmt: (v) => fmt(v, 1) + "%" });
   }
   if (S.tab === "flow") {
-    chart($("#ch-credit"), { series: [{ name: "신용잔고", color: hot, pts: P(D.dep, "credit") }], yFmt: f0, tFmt: (v) => fmt(v, 2) + "조" });
+    chart($("#ch-credit"), { series: [{ name: "전체", color: hot, pts: P(D.dep, "credit") }, { name: "코스닥", color: c2, pts: P(D.dep, "credit_kosdaq") }], yFmt: f0, tFmt: (v) => fmt(v, 2) + "조" });
     chart($("#ch-dep"), { series: [{ name: "예탁금", color: cold, pts: P(D.dep, "deposit") }], yFmt: f0, tFmt: (v) => fmt(v, 2) + "조" });
     chart($("#ch-turn"), { series: [{ name: "회전율", color: c1, pts: P(D.mk, "turn") }], yFmt: (v) => f0(v) + "%", tFmt: (v) => fmt(v, 1) + "%" });
     chart($("#ch-trd"), { series: [{ name: "거래대금", color: c2, pts: P(D.mk, "trd20") }], yFmt: f0, tFmt: (v) => fmt(v, 1) + "조" });

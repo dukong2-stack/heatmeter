@@ -4,7 +4,7 @@
 결과는 docs/data/data.json 한 파일에 쌓이고, 웹앱이 이 파일을 읽습니다.
 
   - 한국거래소(pykrx, 로그인 필요): 코스피 PER·PBR, 코스피·코스닥 시가총액·거래대금, 투자자별 거래대금
-  - 네이버 금융 '증시자금동향': 투자자예탁금(고객예탁금), 신용잔고
+  - 금융투자협회 FreeSIS: 투자자예탁금, 신용거래융자 잔고(전체·코스피·코스닥)
   - 38커뮤니케이션: 신규상장 공모주의 공모가·시초가·첫날 종가, 일반청약 경쟁률
 """
 
@@ -255,59 +255,89 @@ def collect_retail(old):
 
 # ---------- 2. 네이버 증시자금동향 ----------
 
-DATE_RE = re.compile(r"(\d{2,4})\.(\d{1,2})\.(\d{1,2})")
+FREESIS = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
+OBJ_FUNDS = "STATSCU0100000060BO"   # 증시자금추이: 투자자예탁금 등
+OBJ_CREDIT = "STATSCU0100000070BO"  # 신용공여 잔고 추이: 신용거래융자 전체·유가증권·코스닥
 
 
-def parse_deposit_table(t):
-    """표 하나에서 (날짜, 예탁금, 신용잔고) 행을 뽑습니다. 날짜 열은 값 모양으로 찾습니다."""
-    pcol = find_col(t, "예탁금")
-    ccol = find_col(t, "신용")
-    if not pcol:
-        return []
-    dcol = max(t.columns, key=lambda c: t[c].astype(str).str.match(DATE_RE).sum())
-    rows = []
-    for _, r in t.iterrows():
-        m = DATE_RE.match(str(r[dcol]).strip())
-        if not m:
-            continue
-        y = int(m.group(1))
-        y = y + 2000 if y < 100 else y
+def freesis(obj, start, end):
+    """금융투자협회 FreeSIS 통계 조회. 날짜(YYYYMMDD)별 행 목록을 돌려줍니다."""
+    payload = {"dmSearch": {"tmpV40": "1000000", "tmpV41": "1", "tmpV1": "D",
+                            "tmpV45": start, "tmpV46": end, "OBJ_NM": obj}}
+    headers = {**UA, "Content-Type": "application/json; charset=UTF-8",
+               "Referer": "https://freesis.kofia.or.kr/", "Origin": "https://freesis.kofia.or.kr"}
+    last = None
+    for sess in (requests, _legacy):
         try:
-            d = dt.date(y, int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            continue
-        dep = num(r[pcol])
-        cr = num(r[ccol]) if ccol else None
-        if dep is None:
-            continue
-        rows.append({"d": d.isoformat(), "deposit": round(dep / 1e4, 2),
-                     "credit": round(cr / 1e4, 2) if cr else None})
-    return rows
+            r = sess.post(FREESIS, json=payload, headers=headers, timeout=30)
+            r.raise_for_status()
+            js = r.json()
+            rows = js.get("ds1") or next((v for v in js.values() if isinstance(v, list)), [])
+            return rows
+        except Exception as e:  # noqa: BLE001
+            print(f"    FreeSIS 접속 실패: {str(e)[:200]}", flush=True)
+            last = e
+    raise last
+
+
+def to_tn(v):
+    """금액을 조원으로. 단위(백만원·억원)를 값 크기로 판별합니다."""
+    x = num(v)
+    if x is None:
+        return None
+    for div in (1e6, 1e4, 1e2, 1):
+        if 5 <= x / div <= 2000:
+            return round(x / div, 2)
+    return None
+
+
+def date_key(row):
+    for k, v in row.items():
+        s = str(v)
+        if re.fullmatch(r"\d{8}", s):
+            return k
+    return None
 
 
 def collect_deposits(old):
-    """투자자예탁금·신용잔고(조원), 일별. 네이버 표의 단위는 억원."""
-    stop = (last_date(old) - dt.timedelta(days=10)) if old else (TODAY - dt.timedelta(days=365 * 3))
-    new = []
-    for page in range(1, 400):
-        html = get_html("https://finance.naver.com/sise/sise_deposit.naver", {"page": page}, must="예탁금")
-        tables = [flat_cols(t) for t in pd.read_html(io.StringIO(html))]
-        best = max((parse_deposit_table(t) for t in tables), key=len, default=[])
-        if not best:
-            if page == 1:
-                print("    네이버 표 진단:", flush=True)
-                for i, t in enumerate(tables):
-                    print(f"      표{i}: 열={list(t.columns)[:8]} 첫 행={t.head(2).astype(str).values.tolist()}", flush=True)
-                raise RuntimeError("네이버 표에서 날짜·예탁금 행을 찾지 못했습니다(위 진단 참고).")
-            break
-        new += best
-        oldest = min(dt.date.fromisoformat(r["d"]) for r in best)
-        if oldest < stop:
-            break
-        time.sleep(0.4)
-    print(f"  네이버 증시자금: {len(new)}일", flush=True)
+    """투자자예탁금·신용거래융자 잔고(조원), 일별. 출처: 금융투자협회 FreeSIS."""
+    start = start_from(old, 14, 3)
+    out = {}
+    for s, e in year_chunks(start, TODAY):
+        funds = freesis(OBJ_FUNDS, s, e)
+        credit = freesis(OBJ_CREDIT, s, e)
+        if funds and not old and s == start.strftime("%Y%m%d"):
+            print(f"    예탁금 표 첫 행: {funds[0]}", flush=True)
+            if credit:
+                print(f"    신용 표 첫 행: {credit[0]}", flush=True)
+        for rows, kind in ((funds, "f"), (credit, "c")):
+            if not rows:
+                continue
+            dk = date_key(rows[0])
+            vals = [k for k in rows[0] if k != dk and k.upper().startswith("TMPV")]
+            vals.sort(key=lambda k: int(re.sub(r"\D", "", k) or 0))
+            for r in rows:
+                d = str(r.get(dk, ""))
+                if not re.fullmatch(r"\d{8}", d):
+                    continue
+                iso = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                x = out.setdefault(iso, {"d": iso})
+                if kind == "f" and vals:
+                    x["deposit"] = to_tn(r.get(vals[0]))
+                if kind == "c" and vals:
+                    x["credit"] = to_tn(r.get(vals[0]))
+                    if len(vals) >= 3:
+                        x["credit_kospi"] = to_tn(r.get(vals[1]))
+                        x["credit_kosdaq"] = to_tn(r.get(vals[2]))
+        print(f"  금융투자협회 {s}~{e}: 누적 {len(out)}일", flush=True)
+        time.sleep(0.5)
+    new = [v for k, v in sorted(out.items()) if v.get("deposit") or v.get("credit")]
     if not new:
-        raise RuntimeError("네이버에서 예탁금을 읽지 못했습니다.")
+        raise RuntimeError("금융투자협회 FreeSIS에서 예탁금·신용잔고를 받지 못했습니다.")
+    lastrow = new[-1]
+    print(f"    최근 값 확인: {lastrow}", flush=True)
+    if lastrow.get("deposit") and not (20 <= lastrow["deposit"] <= 500):
+        raise RuntimeError(f"예탁금 값이 이상합니다({lastrow['deposit']}조). 열 순서를 확인해야 합니다.")
     return merge(old, new, "d")
 
 
@@ -384,7 +414,7 @@ def main():
     jobs = [
         ("market", "한국거래소 지수·PER·시가총액", collect_market),
         ("retail", "한국거래소 투자자별 거래대금", collect_retail),
-        ("deposits", "네이버 예탁금·신용잔고", collect_deposits),
+        ("deposits", "금융투자협회 예탁금·신용잔고", collect_deposits),
         ("ipo", "38커뮤니케이션 공모주", collect_ipo),
     ]
     for key, label, fn in jobs:

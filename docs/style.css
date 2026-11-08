@@ -116,3 +116,10 @@ button { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: no-preference) {
   .strip span { transition: background-color .4s ease; }
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .tab.in-r { animation: slide-r .22s ease-out; }
+  .tab.in-l { animation: slide-l .22s ease-out; }
+  @keyframes slide-r { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+  @keyframes slide-l { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+}

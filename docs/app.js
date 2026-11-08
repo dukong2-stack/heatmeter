@@ -362,7 +362,7 @@ function renderRules(D) {
 
 function renderMeta(meta) {
   const u = meta.updated ? new Date(meta.updated) : null;
-  $("#stamp").textContent = u ? `${fdate(u.getTime())} ${String(u.getHours()).padStart(2, "0")}:${String(u.getMinutes()).padStart(2, "0")} 갱신` : "";
+  $("#stamp").textContent = u ? `${fdate(u.getTime())} ${String(u.getHours()).padStart(2, "0")}:${String(u.getMinutes()).padStart(2, "0")} 데이터 수집` : "";
   const n = $("#notice");
   if (meta.errors && meta.errors.length) {
     n.hidden = false;
@@ -370,15 +370,44 @@ function renderMeta(meta) {
   } else n.hidden = true;
 }
 
-function setTab(t) {
+const TABS = ["sum", "val", "flow", "mood"];
+
+function setTab(t, dir = 0) {
   S.tab = t;
-  document.querySelectorAll(".tab").forEach((s) => (s.hidden = s.dataset.tab !== t));
+  document.querySelectorAll(".tab").forEach((s) => {
+    s.hidden = s.dataset.tab !== t;
+    s.classList.remove("in-l", "in-r");
+    if (!s.hidden && dir) { void s.offsetWidth; s.classList.add(dir > 0 ? "in-r" : "in-l"); }
+  });
   document.querySelectorAll(".tabbar button").forEach((b) => (b.getAttribute("data-t") === t ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
   $(".period").hidden = t === "sum";
   hideTip();
   renderCharts();
   window.scrollTo({ top: t === "sum" ? 0 : $(".period").offsetTop - 12 });
 }
+
+/* 좌우로 밀어서 탭 이동. 차트 위에서는 값 보기와 겹치지 않게 빠르게 튕길 때만 넘어갑니다. */
+(function swipe() {
+  let x0 = null, y0 = 0, t0 = 0, onChart = false;
+  document.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) { x0 = null; return; }
+    const el = e.target;
+    const wide = el.closest(".tbl-wrap");
+    if (el.closest(".tabbar, .period, summary") || (wide && wide.scrollWidth > wide.clientWidth + 2)) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now();
+    onChart = !!el.closest(".chart");
+  }, { passive: true });
+  document.addEventListener("touchend", (e) => {
+    if (x0 == null) return;
+    const p = e.changedTouches[0], dx = p.clientX - x0, dy = p.clientY - y0, dt = Date.now() - t0;
+    x0 = null;
+    const minDx = onChart ? 80 : 60, maxDt = onChart ? 350 : 800;
+    if (Math.abs(dx) < minDx || Math.abs(dx) < Math.abs(dy) * 1.5 || dt > maxDt) return;
+    const i = TABS.indexOf(S.tab), j = dx < 0 ? i + 1 : i - 1;
+    if (j < 0 || j >= TABS.length) return;
+    setTab(TABS[j], dx < 0 ? 1 : -1);
+  }, { passive: true });
+})();
 
 document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.t)));
 document.querySelectorAll(".period button").forEach((b) => b.addEventListener("click", () => {
